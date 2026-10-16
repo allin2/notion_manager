@@ -90,20 +90,23 @@ type quotaV2Response struct {
 		LastSpaceUsageAtMs int64 `json:"lastSpaceUsageAtMs"`
 	} `json:"basicCredits"`
 	PremiumCredits struct {
-		TotalCreditBalance int `json:"totalCreditBalance"`
-		CreditsInOverage   int `json:"creditsInOverage"`
+		// Credit fields are floats upstream (e.g. 277.495629) — int fields
+		// here make the whole V2 parse fail whenever Notion sends a
+		// fractional balance or usage. Callers round to int on use.
+		TotalCreditBalance float64 `json:"totalCreditBalance"`
+		CreditsInOverage   float64 `json:"creditsInOverage"`
 		PerSource          struct {
 			MonthlyAllocated struct {
-				UsageTotal int `json:"usageTotal"`
-				Limit      int `json:"limit"`
+				UsageTotal float64 `json:"usageTotal"`
+				Limit      float64 `json:"limit"`
 			} `json:"monthlyAllocated"`
 			MonthlyCommitted struct {
-				UsageTotal int `json:"usageTotal"`
-				Limit      int `json:"limit"`
+				UsageTotal float64 `json:"usageTotal"`
+				Limit      float64 `json:"limit"`
 			} `json:"monthlyCommitted"`
 			YearlyElastic struct {
-				UsageTotal int `json:"usageTotal"`
-				Limit      int `json:"limit"`
+				UsageTotal float64 `json:"usageTotal"`
+				Limit      float64 `json:"limit"`
 			} `json:"yearlyElastic"`
 		} `json:"perSource"`
 	} `json:"premiumCredits"`

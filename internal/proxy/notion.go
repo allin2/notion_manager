@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -1909,7 +1910,7 @@ func CheckQuota(acc *Account) (*QuotaInfo, error) {
 	// Some workspaces report remaining premium via monthlyAllocated usage/limit,
 	// while totalCreditBalance can stay at 0.
 	if premiumRemaining <= 0 && monthlyLimit > monthlyUsage {
-		premiumRemaining = monthlyLimit - monthlyUsage
+		premiumRemaining = float64(monthlyLimit - monthlyUsage)
 	}
 
 	// Merge V1 + V2 into QuotaInfo
@@ -1921,10 +1922,10 @@ func CheckQuota(acc *Account) (*QuotaInfo, error) {
 		UserLimit:         v1.UserLimit,
 		LastUsageAtMs:     v1.LastSpaceUsageAtMs,
 		ResearchModeUsage: v1.ResearchModeUsage,
-		// Premium credits from V2
-		PremiumBalance: premiumRemaining,
-		PremiumUsage:   monthlyUsage,
-		PremiumLimit:   monthlyLimit,
+		// Premium credits from V2 (rounded: upstream values are fractional)
+		PremiumBalance: int(math.Round(premiumRemaining)),
+		PremiumUsage:   int(math.Round(monthlyUsage)),
+		PremiumLimit:   int(math.Round(monthlyLimit)),
 	}
 	info.HasPremium = info.PremiumLimit > 0 ||
 		v2.PremiumCredits.PerSource.MonthlyCommitted.Limit > 0 ||
