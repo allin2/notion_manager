@@ -250,7 +250,11 @@ func main() {
 
 	proxy.EnsureApiKey(cfg, "config.yaml")
 
-	if cfg.Server.AdminPassword == "" {
+	switch {
+	case cfg.Server.DisableDashboardAuth:
+		cfg.Server.AdminPassword = ""
+		log.Printf("[config] disable_dashboard_auth=true, dashboard login is DISABLED (trusted network only)")
+	case cfg.Server.AdminPassword == "":
 		generated := proxy.GenerateAdminPassword()
 		cfg.Server.AdminPassword = generated
 		log.Printf("[config] no admin_password configured, generated: %s", generated)

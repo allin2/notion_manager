@@ -34,6 +34,10 @@ type ServerConfig struct {
 	TokenFile     string `yaml:"token_file"`
 	ApiKey        string `yaml:"api_key"`
 	AdminPassword string `yaml:"admin_password"`
+	// DisableDashboardAuth skips the random admin-password bootstrap and
+	// leaves the dashboard open (no login). Intended for trusted LANs;
+	// the /v1 API stays protected by api_key regardless.
+	DisableDashboardAuth bool `yaml:"disable_dashboard_auth"`
 	LogFile       string `yaml:"log_file"`
 	DebugLogging  bool   `yaml:"debug_logging"`
 	APILogInput   bool   `yaml:"api_log_input"`

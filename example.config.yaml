@@ -34,6 +34,10 @@ server:
     # on first startup it will be replaced with a SHA256+salt hash.
     # If empty, a random password will be generated and printed to console.
     admin_password: ""
+    # Set true to open the dashboard without any login (admin_password is
+    # ignored). Only for trusted LANs — the /v1 API stays protected by
+    # api_key regardless.
+    disable_dashboard_auth: false
 proxy:
     # Notion API base URL
     notion_api_base: "https://www.notion.so/api/v3"
