@@ -10,6 +10,7 @@ import (
 	mrand "math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,32 +72,40 @@ func readPrivateAccountFile(path string) ([]byte, error) {
 	return data, nil
 }
 
+// writePrivateAccountFile atomically replaces path with data: it writes a
+// temp file in the same directory, fsyncs, and renames over the target, so
+// a crash mid-write can never leave a truncated or half-written account
+// file behind (credentials live here — corruption is expensive).
 func writePrivateAccountFile(path string, data []byte) (err error) {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, accountFileMode)
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp")
 	if err != nil {
 		return err
 	}
+	tmpName := tmp.Name()
 	defer func() {
-		if closeErr := f.Close(); err == nil {
-			err = closeErr
+		if err != nil {
+			tmp.Close()
+			os.Remove(tmpName)
 		}
 	}()
 
-	if err := f.Chmod(accountFileMode); err != nil {
+	if err = tmp.Chmod(accountFileMode); err != nil {
 		return err
 	}
-	if err := f.Truncate(0); err != nil {
-		return err
+	n, werr := tmp.Write(data)
+	if werr != nil {
+		return werr
 	}
-	if _, err := f.Seek(0, 0); err != nil {
-		return err
-	}
-	if n, err := f.Write(data); err != nil {
-		return err
-	} else if n != len(data) {
+	if n != len(data) {
 		return io.ErrShortWrite
 	}
-	return nil
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 type AccountPool struct {
@@ -408,7 +417,7 @@ func (p *AccountPool) LoadSingle(tokenFile string) error {
 func (p *AccountPool) Next() *Account {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.pickNextRoundRobin(nil)
+	return p.pickNextRoundRobin(nil, "")
 }
 
 // NextForResearch returns the next available account suitable for research mode.
@@ -427,7 +436,7 @@ func (p *AccountPool) NextForResearch() *Account {
 	bestUsage := int(^uint(0) >> 1)
 	for i := 0; i < n; i++ {
 		acc := p.accounts[(start+uint64(i))%uint64(n)]
-		if p.isUnusable(acc) {
+		if p.isUnusable(acc) || p.restedFor(acc, "") {
 			continue
 		}
 		quota := acc.quotaInfoSnapshot()
@@ -458,13 +467,14 @@ func (p *AccountPool) NextForResearch() *Account {
 func (p *AccountPool) NextExcluding(exclude map[*Account]bool) *Account {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.pickNextRoundRobin(exclude)
+	return p.pickNextRoundRobin(exclude, "")
 }
 
-// pickNextRoundRobin returns the first available (non-exhausted, non-excluded)
-// account starting from the rotating index. This gives true round-robin
-// distribution across accounts.
-func (p *AccountPool) pickNextRoundRobin(exclude map[*Account]bool) *Account {
+// pickNextRoundRobin returns the first available (non-exhausted, non-excluded,
+// not resting for the requested model) account starting from the rotating
+// index. This gives true round-robin distribution across accounts. model ""
+// only skips whole-account rests.
+func (p *AccountPool) pickNextRoundRobin(exclude map[*Account]bool, model string) *Account {
 	n := len(p.accounts)
 	if n == 0 {
 		return nil
@@ -475,7 +485,7 @@ func (p *AccountPool) pickNextRoundRobin(exclude map[*Account]bool) *Account {
 		if exclude != nil && exclude[acc] {
 			continue
 		}
-		if p.isUnusable(acc) {
+		if p.isUnusable(acc) || p.restedFor(acc, model) {
 			continue
 		}
 		return acc
@@ -496,7 +506,7 @@ func (p *AccountPool) pickNextRoundRobin(exclude map[*Account]bool) *Account {
 //     fall back to the first usable account in rotation order so freshly
 //     loaded accounts can still serve traffic before the first refresh
 //     completes.
-func (p *AccountPool) pickBestAccountLocked(exclude map[*Account]bool) *Account {
+func (p *AccountPool) pickBestAccountLocked(exclude map[*Account]bool, model string) *Account {
 	n := len(p.accounts)
 	if n == 0 {
 		return nil
@@ -510,7 +520,7 @@ func (p *AccountPool) pickBestAccountLocked(exclude map[*Account]bool) *Account 
 		if exclude != nil && exclude[acc] {
 			continue
 		}
-		if p.isUnusable(acc) {
+		if p.isUnusable(acc) || p.restedFor(acc, model) {
 			continue
 		}
 		score := accountQuotaPriority(acc)
@@ -532,21 +542,38 @@ func (p *AccountPool) pickBestAccountLocked(exclude map[*Account]bool) *Account 
 	return fallback
 }
 
-// NextBest returns the next available account, preferring accounts with the
-// highest remaining basic quota. Used for new conversations (no existing
-// session) so high-quota accounts get used first instead of round-robin.
-func (p *AccountPool) NextBest() *Account {
+// NextBest returns the next available account for the requested model,
+// preferring accounts with the highest remaining basic quota. Used for new
+// conversations (no existing session) so high-quota accounts get used first
+// instead of round-robin. Accounts resting (whole-account, or for this
+// specific model) are skipped.
+func (p *AccountPool) NextBest(model string) *Account {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.pickBestAccountLocked(nil)
+	return p.pickBestAccountLocked(nil, model)
 }
 
-// NextBestExcluding returns the next best available account, excluding the
-// given accounts (used for retries / failover).
-func (p *AccountPool) NextBestExcluding(exclude map[*Account]bool) *Account {
+// NextBestExcluding returns the next best available account for the
+// requested model, excluding the given accounts (used for retries / failover).
+func (p *AccountPool) NextBestExcluding(exclude map[*Account]bool, model string) *Account {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.pickBestAccountLocked(exclude)
+	return p.pickBestAccountLocked(exclude, model)
+}
+
+// restedFor reports whether acc is currently resting either as a whole or
+// for the requested model. Caller holds p.mu (read or write); acc.mu is
+// taken internally (consistent p → acc lock order).
+func (p *AccountPool) restedFor(acc *Account, model string) bool {
+	if _, ok := acc.accRestForLocked(""); ok {
+		return true
+	}
+	if model != "" {
+		if _, ok := acc.accRestForLocked(model); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // MarkQuotaExhausted marks an account as quota-exhausted with a timestamp.
@@ -630,6 +657,229 @@ func (p *AccountPool) MarkInferenceUnavailable(acc *Account) {
 	p.MarkQuotaExhausted(acc)
 }
 
+// ---------- Rest (classified, time-based cooldowns; borrowed from magpie) ----------
+
+// accRestFor returns the active (unexpired) rest for the account as a whole,
+// or for the specific model when model != "". Expired rests are lazily
+// removed. Caller must NOT hold acc.mu.
+func (acc *Account) accRestFor(model string) (*Rest, bool) {
+	if acc == nil {
+		return nil, false
+	}
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	return acc.accRestForLocked(model)
+}
+
+func (acc *Account) accRestForLocked(model string) (*Rest, bool) {
+	if len(acc.Rests) == 0 {
+		return nil, false
+	}
+	now := time.Now()
+	lookup := []string{""}
+	if model != "" && model != restWholeAccount {
+		lookup = append(lookup, model)
+	}
+	for _, key := range lookup {
+		r, ok := acc.Rests[key]
+		if !ok {
+			continue
+		}
+		// Counter-only entries carry a zero Until: they track the
+		// consecutive-failure count between failures and never block, and
+		// must not be garbage-collected by a read or the backoff resets.
+		if !r.Until.IsZero() && now.After(r.Until) {
+			delete(acc.Rests, key)
+			continue
+		}
+		if r.Until.IsZero() {
+			continue
+		}
+		cp := *r
+		return &cp, true
+	}
+	return nil, false
+}
+
+// restWholeAccount is the sentinel model value for an account-wide rest.
+const restWholeAccount = "__account__"
+
+// accSetRest stores r (replacing any rest with the same key). Caller must
+// NOT hold acc.mu.
+func (acc *Account) accSetRest(r *Rest) {
+	if acc == nil || r == nil {
+		return
+	}
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	if acc.Rests == nil {
+		acc.Rests = make(map[string]*Rest)
+	}
+	cp := *r
+	acc.Rests[r.key()] = &cp
+}
+
+// accClearRests removes every rest of the account (whole + per-model).
+// Caller must NOT hold acc.mu.
+func (acc *Account) accClearRests() {
+	if acc == nil {
+		return
+	}
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	acc.Rests = nil
+}
+
+// accBumpFailures increments and returns the consecutive-failure counter for
+// a rest key. The counter lives on the stored rest (or a counter-only
+// placeholder between failures) and is cleared by NoteServed. Caller must
+// NOT hold acc.mu.
+func (acc *Account) accBumpFailures(key string) int {
+	if acc == nil {
+		return 1
+	}
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	if acc.Rests == nil {
+		acc.Rests = make(map[string]*Rest)
+	}
+	// Count against the existing rest with the same key when one is live;
+	// otherwise keep a counter-only entry until it is served or stored.
+	if r, ok := acc.Rests[key]; ok {
+		r.Failures++
+		return r.Failures
+	}
+	acc.Rests[key] = &Rest{Model: modelOfRestKey(key), Failures: 1, Until: time.Time{}}
+	return 1
+}
+
+func modelOfRestKey(key string) string {
+	if key == "" {
+		return restWholeAccount
+	}
+	return key
+}
+
+// restsSnapshot returns the active rests for the dashboard, sorted so the
+// whole-account rest (if any) comes first. Caller must NOT hold acc.mu.
+func (acc *Account) restsSnapshot() []Rest {
+	if acc == nil {
+		return nil
+	}
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	now := time.Now()
+	var out []Rest
+	for key, r := range acc.Rests {
+		if r.Until.IsZero() {
+			continue // counter-only entry
+		}
+		if now.After(r.Until) {
+			delete(acc.Rests, key)
+			continue
+		}
+		out = append(out, *r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if (out[i].Model == "" || out[i].Model == restWholeAccount) != (out[j].Model == "" || out[j].Model == restWholeAccount) {
+			return out[i].Model == "" || out[i].Model == restWholeAccount
+		}
+		return out[i].Until.Before(out[j].Until)
+	})
+	return out
+}
+
+// RestAccountForFailure records a classified upstream failure against acc
+// and returns the rest that was set. Model-gated failures rest only the
+// (account, model) pair — the account keeps serving its other models —
+// while every other class benches the whole account.
+func (p *AccountPool) RestAccountForFailure(acc *Account, nf *NotionFailure, model string) *Rest {
+	if acc == nil || nf == nil {
+		return nil
+	}
+	pol, ok := restPolicies[nf.Why]
+	if !ok {
+		pol = restPolicies[FailOther]
+	}
+	key := ""
+	displayModel := ""
+	if pol.modelScoped {
+		key, displayModel = model, model
+	}
+	failures := acc.accBumpFailures(key)
+	d := pol.base
+	if pol.backoff && failures > 1 {
+		d = pol.base << uint(min(failures-1, 10))
+		if d > pol.cap {
+			d = pol.cap
+		}
+	}
+	now := time.Now()
+	r := &Rest{
+		Why:      nf.Why,
+		Status:   nf.Status,
+		Since:    now,
+		Until:    now.Add(d),
+		Failures: failures,
+		Model:    displayModel,
+		Detail:   nf.Body,
+	}
+	acc.accSetRest(r)
+	scope := "account"
+	if displayModel != "" {
+		scope = "model " + displayModel
+	}
+	log.Printf("[rest] %s (%s) rested %s why=%s status=%d until=%s failures=%d detail=%s",
+		acc.UserName, acc.UserEmail, scope, nf.Why, nf.Status, r.Until.Format(time.RFC3339), failures, r.Detail)
+	return r
+}
+
+// NoteServed clears every rest on the account after a successful inference:
+// an answer is the strongest possible proof of recovery (magpie's served()).
+// The legacy quota-exhausted flags are intentionally untouched — they can
+// only be cleared by an API-confirmed live check, and an account that
+// served a request cannot have them set.
+func (p *AccountPool) NoteServed(acc *Account, model string) {
+	if acc == nil {
+		return
+	}
+	if r, ok := acc.accRestFor(model); ok {
+		log.Printf("[rest] %s (%s) answered successfully — clearing %s rest", acc.UserName, acc.UserEmail, r.Why)
+	}
+	acc.accClearRests()
+}
+
+// UnrestByEmail lifts every rest on the account plus the legacy
+// quota-exhausted marks. This is the dashboard's manual recovery lever:
+// after re-importing a fresh token_v2, the operator should not have to
+// wait for the next refresh tick.
+func (p *AccountPool) UnrestByEmail(email string) (bool, error) {
+	target := strings.ToLower(strings.TrimSpace(email))
+	if target == "" {
+		return false, fmt.Errorf("empty email")
+	}
+	p.mu.RLock()
+	var acc *Account
+	for _, a := range p.accounts {
+		if strings.EqualFold(strings.ToLower(strings.TrimSpace(a.UserEmail)), target) {
+			acc = a
+			break
+		}
+	}
+	p.mu.RUnlock()
+	if acc == nil {
+		return false, fmt.Errorf("account not in pool: %s", email)
+	}
+	acc.accClearRests()
+	quota := acc.quotaSnapshot()
+	hadMarks := quota.ExhaustedAt != nil || quota.PermanentlyExhausted
+	if hadMarks {
+		acc.clearQuotaExhausted()
+	}
+	log.Printf("[rest] %s manually unrested by operator (lifted legacy exhaustion marks: %v)", acc.UserEmail, hadMarks)
+	return true, nil
+}
+
 // quotaApplyResult describes how applyQuotaInfo changed the account state.
 // Caller can use it to emit a human-friendly log line.
 type quotaApplyResult struct {
@@ -700,6 +950,21 @@ func (p *AccountPool) applyQuotaInfo(acc *Account, info *QuotaInfo) quotaApplyRe
 func (p *AccountPool) RefreshAccountQuota(acc *Account, minInterval time.Duration) bool {
 	if acc == nil {
 		return false
+	}
+	// Per-account cadence layering (cockpit-tools style): a positive
+	// refresh_seconds_override replaces the caller-supplied interval for
+	// this account only, and -1 disables live checks entirely — the cached
+	// snapshot is authoritative (the background refresh loop still updates
+	// it). 0 keeps the global default.
+	switch ovr := acc.RefreshSecondsOverride; {
+	case ovr < 0:
+		quota := acc.quotaSnapshot()
+		if quota.Info != nil {
+			return quota.Info.IsEligible
+		}
+		return !p.isQuotaExhaustedRLock(acc)
+	case ovr > 0:
+		minInterval = time.Duration(ovr) * time.Second
 	}
 	// Cached fast path: avoid hammering Notion on tight retry loops.
 	quota := acc.quotaSnapshot()
@@ -1460,6 +1725,11 @@ func (p *AccountPool) GetAccountDetails() []map[string]interface{} {
 		}
 		if p.isQuotaExhausted(acc) && quota.ExhaustedAt != nil {
 			entry["exhausted_at"] = quota.ExhaustedAt.Format(time.RFC3339)
+		}
+		// Active rests (whole-account and model-scoped). Rest carries JSON
+		// tags so it serializes as-is for the dashboard.
+		if rests := acc.restsSnapshot(); len(rests) > 0 {
+			entry["rests"] = rests
 		}
 		// Models
 		var modelEntries []map[string]string

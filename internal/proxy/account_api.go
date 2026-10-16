@@ -457,6 +457,11 @@ func SaveAccountToFile(acc *Account, dir string) (string, error) {
 	if quota.CheckedAt != nil {
 		data["quota_checked_at"] = quota.CheckedAt.Format(time.RFC3339)
 	}
+	// Persist the per-account refresh cadence override so it survives
+	// restarts (loaded back via the struct's json tag).
+	if acc.RefreshSecondsOverride != 0 {
+		data["refresh_seconds_override"] = acc.RefreshSecondsOverride
+	}
 	data["extracted_at"] = time.Now().Format(time.RFC3339)
 
 	out, err := json.MarshalIndent(data, "", "  ")
@@ -702,6 +707,47 @@ func HandleDeleteAccount(pool *AccountPool, accountsDir string, auth *DashboardA
 		}
 
 		log.Printf("[delete-account] removed: %s (account_id=%s)", email, accountID)
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
+}
+
+// HandleAdminUnrest clears every active rest on an account (plus the legacy
+// quota-exhausted marks), returning it to rotation immediately. This is the
+// operator's manual recovery lever after e.g. re-importing a fresh token_v2.
+func HandleAdminUnrest(pool *AccountPool, auth *DashboardAuth) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.Method != "POST" {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Require dashboard session
+		if auth.HasAdminPassword() && !auth.ValidateSession(r) {
+			http.Error(w, `{"error":"unauthorized, dashboard login required"}`, http.StatusUnauthorized)
+			return
+		}
+
+		var body struct {
+			Email string `json:"email"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		email := strings.TrimSpace(body.Email)
+		if email == "" {
+			http.Error(w, `{"error":"email is required"}`, http.StatusBadRequest)
+			return
+		}
+
+		if _, err := pool.UnrestByEmail(email); err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}
 }

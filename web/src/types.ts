@@ -3,6 +3,20 @@ export interface Model {
   name: string
 }
 
+// RestInfo mirrors Go's proxy.Rest — a temporary sit-out recorded for an
+// account (model absent) or an (account, model) pair after a classified
+// upstream failure. The dashboard shows why + until so the operator can
+// decide whether to lift it manually via the unrest action.
+export interface RestInfo {
+  why: string
+  status?: number
+  since: string
+  until: string
+  failures: number
+  model?: string
+  detail?: string
+}
+
 export interface AccountInfo {
   account_id: string
   email: string
@@ -42,6 +56,7 @@ export interface AccountInfo {
   premium_limit?: number
   token_v2?: string
   registered_via?: string
+  rests?: RestInfo[]
 }
 
 export interface ProviderInfo {

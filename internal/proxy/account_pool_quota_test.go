@@ -27,7 +27,7 @@ func TestNextBestPicksHighestRemainingQuota(t *testing.T) {
 	}
 	pool := newPool(low, mid, high)
 
-	got := pool.NextBest()
+	got := pool.NextBest("")
 	if got == nil || got.UserEmail != "high@example.com" {
 		t.Fatalf("expected highest-remaining account, got %#v", got)
 	}
@@ -49,28 +49,28 @@ func TestNextBestExcludingSkipsTriedAndPicksNextHighest(t *testing.T) {
 	pool := newPool(a, b, c)
 
 	// First pick should be 'a' (highest remaining).
-	first := pool.NextBest()
+	first := pool.NextBest("")
 	if first == nil || first.UserEmail != "a@example.com" {
 		t.Fatalf("expected first NextBest to be 'a', got %#v", first)
 	}
 
 	// After excluding 'a', the next best should be 'b'.
 	tried := map[*Account]bool{a: true}
-	second := pool.NextBestExcluding(tried)
+	second := pool.NextBestExcluding(tried, "")
 	if second == nil || second.UserEmail != "b@example.com" {
 		t.Fatalf("expected second NextBestExcluding to be 'b', got %#v", second)
 	}
 
 	// Excluding 'a' and 'b' leaves 'c'.
 	tried[b] = true
-	third := pool.NextBestExcluding(tried)
+	third := pool.NextBestExcluding(tried, "")
 	if third == nil || third.UserEmail != "c@example.com" {
 		t.Fatalf("expected third NextBestExcluding to be 'c', got %#v", third)
 	}
 
 	// All excluded → nil
 	tried[c] = true
-	if got := pool.NextBestExcluding(tried); got != nil {
+	if got := pool.NextBestExcluding(tried, ""); got != nil {
 		t.Fatalf("expected nil when all accounts excluded, got %#v", got)
 	}
 }
@@ -83,7 +83,7 @@ func TestNextBestFallsBackToUnknownQuota(t *testing.T) {
 	b := &Account{UserEmail: "b@example.com"}
 	pool := newPool(a, b)
 
-	got := pool.NextBest()
+	got := pool.NextBest("")
 	if got == nil {
 		t.Fatal("expected fallback when no quota info present, got nil")
 	}
@@ -100,7 +100,7 @@ func TestNextBestPrefersScoredOverUnknownQuota(t *testing.T) {
 	unknown := &Account{UserEmail: "unknown@example.com"}
 	pool := newPool(unknown, known) // unknown listed first to defeat ordering bias
 
-	got := pool.NextBest()
+	got := pool.NextBest("")
 	if got == nil || got.UserEmail != "known@example.com" {
 		t.Fatalf("expected known-quota account to be preferred, got %#v", got)
 	}
@@ -117,7 +117,7 @@ func TestNextBestSkipsExhaustedAccounts(t *testing.T) {
 	}
 	pool := newPool(exhausted, healthy)
 
-	got := pool.NextBest()
+	got := pool.NextBest("")
 	if got == nil || got.UserEmail != "healthy@example.com" {
 		t.Fatalf("expected exhausted account to be skipped, got %#v", got)
 	}
@@ -149,7 +149,7 @@ func TestAccountQuotaPriorityFoldsPremium(t *testing.T) {
 	}
 
 	pool := newPool(basicOnly, premiumLowBasic)
-	got := pool.NextBest()
+	got := pool.NextBest("")
 	if got == nil || got.UserEmail != "premium@example.com" {
 		t.Fatalf("expected premium account to win, got %#v", got)
 	}
@@ -372,7 +372,7 @@ func TestSelectorsSkipAccountAfterApplyQuotaInfo(t *testing.T) {
 		UserLimit: 200, UserUsage: 200,
 	})
 
-	if got := pool.NextBest(); got == nil || got.UserEmail != "healthy@example.com" {
+	if got := pool.NextBest(""); got == nil || got.UserEmail != "healthy@example.com" {
 		t.Fatalf("NextBest should skip newly-disabled account, got %#v", got)
 	}
 	if got := pool.Next(); got == nil || got.UserEmail != "healthy@example.com" {

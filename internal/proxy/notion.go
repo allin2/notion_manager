@@ -1442,7 +1442,7 @@ func CallInference(acc *Account, messages []ChatMessage, model string, disableBu
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		LogNotionResponseText(requestID, "POST /runInferenceTranscript error body", string(body))
-		return fmt.Errorf("notion API error %d: %s", resp.StatusCode, string(body[:min(len(body), 500)]))
+		return classifyNotionFailure(resp.StatusCode, body)
 	}
 
 	// Decompress
@@ -3384,7 +3384,7 @@ func callResearcherInference(acc *Account, messages []ChatMessage, cb StreamCall
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		LogNotionResponseText(requestID, "POST /runInferenceTranscript researcher error body", string(body))
-		return fmt.Errorf("notion researcher API error %d: %s", resp.StatusCode, string(body[:min(len(body), 500)]))
+		return classifyNotionFailure(resp.StatusCode, body)
 	}
 
 	reader, cleanup, err := decompressBody(resp)

@@ -24,7 +24,14 @@
     "recent_ai": "Recent AI {{date}}",
     "unavailable": "Unavailable ⚠",
     "open_proxy": "Open Proxy →",
-    "quota_unified": "Space / User Quotas match"
+    "quota_unified": "Space / User Quotas match",
+    "resting_until": "Resting {{why}}{{model}} · {{until}}",
+    "rest_why_quota": "quota",
+    "rest_why_rate": "rate limit",
+    "rest_why_auth": "auth failed",
+    "rest_why_restricted": "restricted",
+    "rest_why_model": "model refused",
+    "rest_why_other": "error"
   },
   "stats": {
     "total_accounts": "Total Accounts",
@@ -150,6 +157,8 @@
     "copied": "Copied",
     "copy_token": "Copy token_v2",
     "open_proxy": "Open Proxy",
+    "unrest": "Lift Rest",
+    "unrest_failed": "Unrest failed",
     "confirm_delete": "Confirm delete?",
     "delete_account": "Delete Account"
   },

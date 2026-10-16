@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AccountInfo } from '../types'
-import { deleteAccount, openProxy } from '../api'
-import { IconExternalLink, IconMore, IconTrash } from './Icons'
+import { deleteAccount, openProxy, unrestAccount } from '../api'
+import { IconExternalLink, IconMore, IconRotate, IconTrash } from './Icons'
 
 interface Props {
   account: AccountInfo
@@ -17,6 +17,7 @@ export function AccountMenu({ account, onChanged }: Props) {
   const [open, setOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const [unresting, setUnresting] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -66,6 +67,24 @@ export function AccountMenu({ account, onChanged }: Props) {
     }
   }
 
+  // Unrest appears only while the account carries active rests (recorded
+  // by the failure classifier). It returns the account — and every rested
+  // (account, model) pair — to rotation without waiting for expiry.
+  const onUnrest = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setUnresting(true)
+    try {
+      await unrestAccount(account.email)
+      onChanged()
+    } catch (err) {
+      console.error('unrest account failed', err)
+      alert(t('menu.unrest_failed'))
+    } finally {
+      setUnresting(false)
+      setOpen(false)
+    }
+  }
+
   return (
     <div ref={wrapRef} className="relative" onClick={(e) => e.stopPropagation()}>
       <button
@@ -84,6 +103,14 @@ export function AccountMenu({ account, onChanged }: Props) {
           onClick={(e) => e.stopPropagation()}
         >
           <MenuItem onClick={onOpenProxy} icon={<IconExternalLink size={13} />} label={t('menu.open_proxy')} />
+          {!!account.rests?.length && (
+            <MenuItem
+              onClick={onUnrest}
+              disabled={unresting}
+              icon={<IconRotate size={13} />}
+              label={t('menu.unrest')}
+            />
+          )}
           <div className="border-t border-border my-1" />
           <MenuItem
             onClick={onDelete}

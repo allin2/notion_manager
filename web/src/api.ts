@@ -368,6 +368,18 @@ export async function deleteAccount(accountId: string): Promise<void> {
   await jsonOrError(resp)
 }
 
+// unrestAccount lifts every active rest on the account (plus legacy
+// exhausted marks), returning it to rotation immediately.
+export async function unrestAccount(email: string): Promise<void> {
+  const resp = await fetch('/admin/accounts/unrest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ email }),
+  })
+  await jsonOrError(resp)
+}
+
 export function jobEventsUrl(id: string): string {
   return `/admin/register/jobs/${encodeURIComponent(id)}/events`
 }

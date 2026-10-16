@@ -29,11 +29,17 @@ type Account struct {
 	// "microsoft"). Empty for accounts onboarded before the provider
 	// registry existed; the dashboard treats those as legacy Microsoft.
 	RegisteredVia string `json:"registered_via,omitempty"`
+	// RefreshSecondsOverride tunes how stale this account's cached quota may
+	// get before a request performs a live check: >0 seconds overrides the
+	// global refresh.quota_recheck_minutes, -1 disables live checks for this
+	// account entirely, 0 (default) uses the global setting.
+	RefreshSecondsOverride int `json:"refresh_seconds_override,omitempty"`
 	// Runtime-only fields (not serialized)
-	QuotaExhaustedAt     *time.Time `json:"-"`
-	QuotaInfo            *QuotaInfo `json:"-"`
-	QuotaCheckedAt       *time.Time `json:"-"`
-	PermanentlyExhausted bool       `json:"-"`
+	QuotaExhaustedAt     *time.Time     `json:"-"`
+	QuotaInfo            *QuotaInfo     `json:"-"`
+	QuotaCheckedAt       *time.Time     `json:"-"`
+	PermanentlyExhausted bool           `json:"-"`
+	Rests                map[string]*Rest `json:"-"` // restKey("") = whole account, model name = model-scoped
 	// Workspace probe state. SpaceCount is the number of `space_views`
 	// returned by /api/v3/loadUserContent for this account's user_root.
 	// 0 with WorkspaceCheckedAt != nil means the Notion onboarding

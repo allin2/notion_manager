@@ -194,7 +194,7 @@ func (p *AccountPool) GetAccountByEmail(email string) *Account {
 func (p *AccountPool) GetBestAccount() *Account {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.pickBestAccountLocked(nil)
+	return p.pickBestAccountLocked(nil, "")
 }
 
 // --- Reverse Proxy helpers ---

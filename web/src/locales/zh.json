@@ -24,7 +24,14 @@
     "recent_ai": "最近 AI {{date}}",
     "unavailable": "不可用 ⚠",
     "open_proxy": "打开代理 →",
-    "quota_unified": "Space / User 配额一致"
+    "quota_unified": "Space / User 配额一致",
+    "resting_until": "休息中 {{why}}{{model}} · {{until}}",
+    "rest_why_quota": "额度耗尽",
+    "rest_why_rate": "触发限流",
+    "rest_why_auth": "认证失效",
+    "rest_why_restricted": "账号受限",
+    "rest_why_model": "模型被拒",
+    "rest_why_other": "请求异常"
   },
   "stats": {
     "total_accounts": "总账号",
@@ -150,6 +157,8 @@
     "copied": "已复制",
     "copy_token": "复制 token_v2",
     "open_proxy": "打开代理",
+    "unrest": "解除休息",
+    "unrest_failed": "解除休息失败",
     "confirm_delete": "确认删除？",
     "delete_account": "删除账号"
   },

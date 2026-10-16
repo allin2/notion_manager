@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { DashboardData, AccountInfo, AccountSummary, RefreshStatus, TokenStats } from './types'
+import type { DashboardData, AccountInfo, AccountSummary, RefreshStatus, TokenStats, RestInfo } from './types'
 import { fetchDashboardData, openProxy, openBestProxy, checkAuth, login, logout, triggerRefresh, fetchSettings, updateSettings, addAccount, fetchTokenStats } from './api'
 import type { SearchSettings } from './api'
 import { fmt, formatTokens, getQuotaStatusByUsage, getQuotaPct, avatarColor, avatarLetter, formatCheckedAt, formatTimestampMs, providerDisplay } from './utils'
@@ -432,7 +432,7 @@ function QuotaBar({ label, labelClass, usage, limit, status }: { label: string; 
   )
 }
 
-function Badge({ children, variant }: { children: React.ReactNode; variant: 'plan' | 'premium' | 'research' | 'warning' | 'model' }) {
+function Badge({ children, variant, title }: { children: React.ReactNode; variant: 'plan' | 'premium' | 'research' | 'warning' | 'model'; title?: string }) {
   const cls: Record<string, string> = {
     plan: 'text-text-secondary',
     premium: 'text-[#7eb8ff]',
@@ -441,10 +441,20 @@ function Badge({ children, variant }: { children: React.ReactNode; variant: 'pla
     model: 'text-text-secondary hover:text-white transition-colors cursor-pointer',
   }
   return (
-    <span className={`inline-flex items-center gap-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap ${cls[variant] || ''}`}>
+    <span title={title} className={`inline-flex items-center gap-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap ${cls[variant] || ''}`}>
       {children}
     </span>
   )
+}
+
+// restRemaining renders the time left on a rest as a coarse countdown.
+// The dashboard polls on an interval, so second-level precision is noise.
+function restRemaining(until: string): string {
+  const ms = new Date(until).getTime() - Date.now()
+  if (!Number.isFinite(ms) || ms <= 0) return '<1m'
+  const mins = Math.ceil(ms / 60000)
+  if (mins < 60) return `${mins}m`
+  return `${Math.floor(mins / 60)}h${String(mins % 60).padStart(2, '0')}m`
 }
 
 function AccountCard({ account, onChanged }: { account: AccountInfo; onChanged: () => void }) {
@@ -528,6 +538,22 @@ function AccountCard({ account, onChanged }: { account: AccountInfo; onChanged: 
         {account.exhausted && !account.permanent && <Badge variant="warning">Basic blocked</Badge>}
         {account.permanent && <Badge variant="warning">Free cap</Badge>}
         {noWorkspace && <Badge variant="warning">{t('account.no_workspace')}</Badge>}
+        {/* Active rests: whole-account and model-scoped sit-outs recorded
+            by the failure classifier. The tooltip carries the upstream
+            error excerpt so the operator can see the raw cause. */}
+        {account.rests?.map((r: RestInfo) => (
+          <Badge
+            key={`${r.why}:${r.model || 'account'}`}
+            variant="warning"
+            title={r.detail}
+          >
+            {t('account.resting_until', {
+              why: t(`account.rest_why_${r.why}`, { defaultValue: r.why }),
+              model: r.model ? ` · ${r.model}` : '',
+              until: restRemaining(r.until),
+            })}
+          </Badge>
+        ))}
         {modelCount > 0 && (
           <button
             onClick={e => { e.stopPropagation(); setShowModels(!showModels) }}

@@ -977,12 +977,13 @@ func HandleAnthropicMessages(pool *AccountPool) http.HandlerFunc {
 				} else if attempt == 0 {
 					// New-conversation routing: pick the account with the
 					// highest remaining quota so high-quota accounts get used
-					// first, instead of round-robin.
-					acc = pool.NextBest()
+					// first, instead of round-robin. Model-aware: accounts
+					// resting for this model are skipped.
+					acc = pool.NextBest(model)
 				} else {
 					// Failover: still prefer high-quota accounts among
 					// accounts we haven't tried yet.
-					acc = pool.NextBestExcluding(tried)
+					acc = pool.NextBestExcluding(tried, model)
 				}
 			}
 			if acc == nil {
@@ -1172,6 +1173,23 @@ func HandleAnthropicMessages(pool *AccountPool) http.HandlerFunc {
 				continue
 			}
 
+			// Classified upstream failure (non-200 from Notion): record a
+			// time-based rest with the right scope — model-gated refusals
+			// (plan / gray-list) rest only this (account, model) pair, every
+			// other class benches the whole account — then fail over.
+			var notionFail *NotionFailure
+			if reqErr != nil && errors.As(reqErr, &notionFail) {
+				pool.RestAccountForFailure(acc, notionFail, model)
+				if !isFirstTurn && session != nil {
+					log.Printf("[session] subsequent turn failed (%v), clearing session and falling back to first turn", reqErr)
+					globalSessionManager.Delete(fingerprint)
+					session = nil
+					isFirstTurn = true
+					isRepeatTurn = false
+				}
+				continue
+			}
+
 			if reqErr != nil {
 				// Non-quota error — if this was a subsequent turn, try clearing session and retrying as first turn
 				if !isFirstTurn && session != nil {
@@ -1186,6 +1204,11 @@ func HandleAnthropicMessages(pool *AccountPool) http.HandlerFunc {
 			}
 
 			// ── Success: save/update session ──
+			if reqErr == nil {
+				// A successful answer proves the account (and model) recovered
+				// from any earlier rest — clear it so later turns prefer it.
+				pool.NoteServed(acc, model)
+			}
 			if !isResearcher && currentSession != nil && reqErr == nil {
 				if isFirstTurn {
 					currentSession.TurnCount = 1
